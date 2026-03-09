@@ -13,7 +13,7 @@ To set up a new experiment, work with the user to:
    - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
    - `train.py` — the file you modify. Model architecture, optimizer, training loop.
 4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Initialize results.tsv**: Create `results.tsv` with header row and baseline entry. The baseline results are already known from the output format section below (val_bpb: 0.997900, peak_vram_mb: 45060.2). Do NOT re-run the baseline — just record it.
+5. **Initialize results.tsv**: Create `results.tsv` with header row and baseline entry. Run the baseline experiment first to establish the baseline values (val_bpb and peak_vram_mb) for your Apple Silicon Mac — these will differ from the H100 reference values.
 6. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
@@ -54,6 +54,8 @@ num_steps:        953
 num_params_M:     50.3
 depth:            8
 ```
+
+Note: These baseline values are from H100. Your Apple Silicon baseline will differ — run the baseline experiment to establish yours.
 
 Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file:
 
