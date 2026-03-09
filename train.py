@@ -351,7 +351,7 @@ class MuonAdamW(torch.optim.Optimizer):
 
     def __init__(self, param_groups):
         super().__init__(param_groups, defaults={})
-        # 0-D CPU tensors to avoid torch.compile recompilation when values change
+        # 0-D CPU tensors so scalar hyperparams can be updated without reallocation
         self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
         self._adamw_beta1_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
