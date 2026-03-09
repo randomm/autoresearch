@@ -14,6 +14,7 @@ from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import subprocess
 
 
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
@@ -441,7 +442,49 @@ FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
 
 # Model size
 DEPTH = 8               # number of transformer layers
-DEVICE_BATCH_SIZE = 16  # per-device batch size (reduce if OOM)
+
+# Auto-detect Apple Silicon hardware and set sensible defaults
+def detect_apple_silicon():
+    """Detect Apple Silicon chip and recommend training config."""
+    # Chip-to-FLOPS mapping (fp16 peak TFLOPS)
+    chip_flops = {
+        "M1": 2.6e12, "M1 Pro": 6.8e12, "M1 Max": 13.6e12, "M1 Ultra": 27.2e12,
+        "M2": 3.6e12, "M2 Pro": 6.8e12, "M2 Max": 13.6e12, "M2 Ultra": 27.2e12,
+        "M3": 4.1e12, "M3 Pro": 7.0e12, "M3 Max": 14.2e12, "M3 Ultra": 28.4e12,
+        "M4": 4.5e12, "M4 Pro": 7.5e12, "M4 Max": 16.0e12,
+    }
+    # Detect chip name
+    try:
+        chip_name = subprocess.check_output(
+            ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+        ).strip()
+    except Exception:
+        chip_name = "Unknown"
+    # Match chip to FLOPS (longest match first to prefer "M2 Max" over "M2")
+    peak_flops = 3.6e12
+    for name in sorted(chip_flops, key=len, reverse=True):
+        if name in chip_name:
+            peak_flops = chip_flops[name]
+            break
+    # Detect available memory (use ~65% of recommended max)
+    try:
+        total_bytes = torch.mps.recommended_max_memory()
+    except Exception:
+        total_bytes = 16 * 1024**3  # assume 16GB
+    budget_gb = total_bytes * 0.65 / 1024**3
+    # Batch size from memory budget
+    if budget_gb < 8:
+        batch_size = 8
+    elif budget_gb < 12:
+        batch_size = 16
+    elif budget_gb < 18:
+        batch_size = 32
+    else:
+        batch_size = 64
+    return chip_name, peak_flops, batch_size, total_bytes / 1024**3
+
+
+CHIP_NAME, PEAK_FLOPS, DEVICE_BATCH_SIZE, TOTAL_MEM_GB = detect_apple_silicon()
 
 # ---------------------------------------------------------------------------
 # Setup: tokenizer, model, optimizer, dataloader
@@ -451,7 +494,11 @@ t_start = time.time()
 torch.manual_seed(42)
 device = torch.device("mps")
 autocast_ctx = torch.amp.autocast(device_type="mps", dtype=torch.float16)
-M2_FP16_PEAK_FLOPS = 3.6e12
+
+print(f"Hardware: {CHIP_NAME}")
+print(f"Memory: {TOTAL_MEM_GB:.1f} GB total, using ~65% for training")
+print(f"Batch size: {DEVICE_BATCH_SIZE} (auto-detected)")
+print(f"Peak FLOPS: {PEAK_FLOPS:.1e}")
 
 tokenizer = Tokenizer.from_directory()
 vocab_size = tokenizer.get_vocab_size()
@@ -576,7 +623,7 @@ while True:
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
     pct_done = 100 * progress
     tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
-    mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / M2_FP16_PEAK_FLOPS
+    mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / PEAK_FLOPS
     remaining = max(0, TIME_BUDGET - total_training_time)
 
     print(f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.1f}% | epoch: {epoch} | remaining: {remaining:.0f}s    ", end="", flush=True)
@@ -607,7 +654,7 @@ with autocast_ctx:
 # Final summary
 t_end = time.time()
 startup_time = t_start_training - t_start
-steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / M2_FP16_PEAK_FLOPS if total_training_time > 0 else 0
+steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / PEAK_FLOPS if total_training_time > 0 else 0
 peak_vram_mb = peak_memory_bytes / 1024 / 1024
 
 print("---")
